@@ -32,9 +32,15 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.memory import MemorySaver
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langgraph.config import get_store
+import rich
 
 # Initialize dotenv to load environment variables
 load_dotenv()
+
+# Validate GOOGLE_APPLICATION_CREDENTIALS
+if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    rich.print("[GCS Error] GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Please set it to the path of your Google Cloud service account key JSON file.")
+    exit(1)
 
 # Initialize Rich for better output formatting and visualization
 rich = Console()
@@ -71,7 +77,7 @@ model_colqwen = ColQwen2.from_pretrained(
 
 processor = ColQwen2Processor.from_pretrained(model_name, use_fast=True)
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/Users/saivignesh/Documents/MRIA/upheld-radar-459515-f3-577a557aa321.json" 
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/Users/saivignesh/Documents/MRIA/upheld-radar-459515-f3-577a557aa321.json"
 
 # Profile store and tools setup
 profile_store = InMemoryStore()
@@ -318,18 +324,16 @@ def qdrant_search_memory_tool(query: str):
     """
 
     try:
-        client = genai.Client(api_key="AIzaSyBfSbHEPbT3JB6WX9DImuKaUyGTmUekakw")
-        storage_client = storage.Client()
-
+        # Configure the Gemini API with the provided API key
+        genai.configure(api_key="AIzaSyBfSbHEPbT3JB6WX9DImuKaUyGTmUekakw")
+        client = genai.GenerativeModel("gemini-1.5-flash")
         print("Sending data to Gemini Vision API...")
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=[types.Content(role="user", parts=[types.Part(text=prompt_text)] + images_payload)]
+        response = client.generate_content(
+            contents=[{"role": "user", "parts": [{"text": prompt_text}] + images_payload}]
         )
         return response.text
     except Exception as e:
-        print(f"GEMINI Error: {e}")
-        return None
+        return f"GEMINI Error: {str(e)}"
 
 async def defined_prompt(state, config):
     user_id = config['configurable']['user_id']
@@ -448,31 +452,59 @@ async def run_query():
             "store": store
         }
 
-        # Define the user query
-        user_query = "NORMAL VALUES FOR HEMODYNAMIC MEASUREMENTS, (Resistances [dyn-s]/cm5)"
-        user_message = HumanMessage(content=user_query)
-
-        # Embed the user query (for potential future use, but not storing directly)
-        user_embedding = embedder.embed_documents([user_query])[0]
         namespace = ("chat", user_id, thread_id)
         rich.print(f"Namespace for storage: {namespace}")
 
-        # Run the agent, which will handle storing the conversation via create_manage_memory_tool
-        response = await main_agent.ainvoke(
-            {"messages": [user_message]},
-            config=config_with_store
-        )
-        rich.print(response)
+        # Interactive loop to prompt the user for queries
+        while True:
+            # Prompt the user for a query
+            user_query = input("Please enter your query (or type 'quit' to exit): ").strip()
 
-        # Verify stored data by searching
-        try:
-            stored_items = await store.asearch(namespace, query=user_query)
-            rich.print("Stored items in database after query:")
-            for item in stored_items:
-                rich.print(f"Item: {item.value}, Score: {item.score}")
-        except Exception as e:
-            rich.print(f"[Postgres Error] Failed to search database after query: {str(e)}")
-            raise
+            # Check if the user wants to quit
+            if user_query.lower() == "quit":
+                rich.print("Exiting the interactive session. Goodbye!")
+                break
+
+            # Skip empty queries
+            if not user_query:
+                rich.print("Empty query. Please enter a valid question.")
+                continue
+
+            # Create a HumanMessage with the user's query
+            user_message = HumanMessage(content=user_query)
+
+            # Embed the user query (for potential future use, e.g., searching the database)
+            user_embedding = embedder.embed_documents([user_query])[0]
+
+            # Run the agent, which will handle storing the conversation via create_manage_memory_tool
+            try:
+                response = await main_agent.ainvoke(
+                    {"messages": [user_message]},
+                    config=config_with_store
+                )
+                rich.print("\nAgent Response:")
+                rich.print(response)
+
+                # Extract the agent's response for display
+                agent_response = response["messages"][-1].content
+                rich.print(f"\n[Answer]: {agent_response}\n")
+
+            except Exception as e:
+                rich.print(f"[Agent Error] Failed to process query: {str(e)}")
+                continue
+
+            # Verify stored data by searching
+            try:
+                stored_items = await store.asearch(namespace, query=user_query)
+                rich.print("Stored items in database after query:")
+                if stored_items:
+                    for item in stored_items:
+                        rich.print(f"Item: {item.value}, Score: {item.score}")
+                else:
+                    rich.print("No items found in the database for this query.")
+            except Exception as e:
+                rich.print(f"[Postgres Error] Failed to search database after query: {str(e)}")
+                continue
 
 # Run the async function
 if __name__ == "__main__":
