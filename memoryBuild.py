@@ -28,7 +28,7 @@ from google.genai import types
 from langchain_core.tools import tool
 from google.cloud import storage
 from langchain.embeddings import init_embeddings
-from langgraph.store.postgres.aio import AsyncPostgresStore  # Use only AsyncPostgresStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.checkpoint.memory import MemorySaver
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langgraph.config import get_store
@@ -47,7 +47,7 @@ print("set env variable OPENAI_API_KEY without fail")
 qdrantclient = QdrantClient(
     url="https://1afa2602-77bb-44f6-95cb-9d5c3b930184.ap-south-1-0.aws.cloud.qdrant.io",
     api_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.zsvJrYsG8j6o1CKaJdrJvYYXmQboRfzxBvokg4u1ORs",
-    timeout=100
+    timeout=300
 )
 collection_name = "MRIA_test1"
 
@@ -57,6 +57,8 @@ try:
 except Exception as e:
     if "Collection not found" in str(e):
         print(f"collection '{collection_name}' Not found")
+    else:
+        print(f"Error accessing Qdrant collection: {e}")
 
 print("Going to load the model!")
 model_name = "vidore/colqwen2-v0.1"
@@ -67,7 +69,9 @@ model_colqwen = ColQwen2.from_pretrained(
     device_map="cpu",
 ).eval()
 
-processor = ColQwen2Processor.from_pretrained(model_name, use_fast=True)  # Added use_fast=True
+processor = ColQwen2Processor.from_pretrained(model_name, use_fast=True)
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/Users/saivignesh/Documents/MRIA/upheld-radar-459515-f3-577a557aa321.json" 
 
 # Profile store and tools setup
 profile_store = InMemoryStore()
@@ -128,6 +132,13 @@ def profileData(query: str, config):
 
     user_id = config['configurable']['user_id']
     namespace = ("profile", user_id)
+    
+    # Log the namespace and config for debugging
+    rich.print(f"ProfileData - Namespace: {namespace}")
+    rich.print(f"ProfileData - Config: {config}")
+
+    # Create a separate InMemoryStore for profile_agent to avoid interference
+    profile_agent_store = InMemoryStore()
 
     profile_agent = create_react_agent(
         model="openai:gpt-4o-mini",
@@ -135,14 +146,24 @@ def profileData(query: str, config):
             create_search_memory_tool(namespace=namespace),
             create_manage_memory_tool(namespace=namespace),
         ],
-        store=profile_store,
+        store=profile_agent_store,  # Use a separate store
         prompt=profile_agent_prompt,
         response_format=UserProfile
     )
 
-    return profile_agent.invoke({"messages": [{"role": "user", "content": query}]}, config={"configurable": {"user_id": user_id}})
+    # Ensure the config passed to profile_agent.invoke has resolved values
+    profile_config = {
+        "configurable": {
+            "user_id": user_id
+        }
+    }
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=10))
+    return profile_agent.invoke(
+        {"messages": [{"role": "user", "content": query}]},
+        config=profile_config
+    )
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=30))
 def qdrant_search_memory_tool(query: str):
     """
     Processes a user query to retrieve relevant documents from a vector database
@@ -160,8 +181,7 @@ def qdrant_search_memory_tool(query: str):
     try:
         colqwen_query = batch_embed_query(query, processor, model_colqwen)
     except Exception as e:
-        print(f"Error embedding query: {e}")
-        return None
+        return f"Error embedding query: {str(e)}"
 
     LLM_category = ['Internal Medicine']
 
@@ -200,10 +220,14 @@ def qdrant_search_memory_tool(query: str):
             ) for query in query_batch
         ]
 
-        response = qdrantclient.query_batch_points(
-            collection_name=collection_name,
-            requests=search_queries
-        )
+        try:
+            response = qdrantclient.query_batch_points(
+                collection_name=collection_name,
+                requests=search_queries
+            )
+        except Exception as e:
+            rich.print(f"[Qdrant Error] Failed to query Qdrant with filter: {str(e)}")
+            return f"Error querying Qdrant: {str(e)}"
 
         if all(not res.points for res in response):
             search_queries = [
@@ -228,39 +252,55 @@ def qdrant_search_memory_tool(query: str):
                     using="original"
                 ) for query in query_batch
             ]
-            response = qdrantclient.query_batch_points(
-                collection_name=collection_name,
-                requests=search_queries
-            )
+            try:
+                response = qdrantclient.query_batch_points(
+                    collection_name=collection_name,
+                    requests=search_queries
+                )
+            except Exception as e:
+                rich.print(f"[Qdrant Error] Failed to query Qdrant (fallback): {str(e)}")
+                return f"Error querying Qdrant (fallback): {str(e)}"
 
         return response
 
     answer_colqwen = reranking_search_batch(colqwen_query, collection_name)
+    if isinstance(answer_colqwen, str):  # Check if an error message was returned
+        return answer_colqwen
 
     top_10_results = []
-    for point in answer_colqwen[0].points[:10]:
-        top_10_results.append({"image_link": point.payload['image_link']})
+    try:
+        for point in answer_colqwen[0].points[:10]:
+            top_10_results.append({"image_link": point.payload['image_link']})
+    except Exception as e:
+        return f"Error processing Qdrant results: {str(e)}"
 
     storage_client = storage.Client()
 
     def download_gcs_image(gcs_uri):
-        if not gcs_uri.startswith("gs://"):
-            raise ValueError("Invalid GCS URI format")
-        bucket_name = gcs_uri.split("/")[2]
-        blob_path = "/".join(gcs_uri.split("/")[3:])
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        return blob.download_as_bytes()
+        try:
+            if not gcs_uri.startswith("gs://"):
+                raise ValueError("Invalid GCS URI format")
+            bucket_name = gcs_uri.split("/")[2]
+            blob_path = "/".join(gcs_uri.split("/")[3:])
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
+            return blob.download_as_bytes()
+        except Exception as e:
+            return f"Error downloading GCS image: {str(e)}"
 
-    images_payload = [
-        types.Part(
-            inline_data=types.Blob(
-                mime_type="image/jpeg",
-                data=download_gcs_image(result["image_link"])
+    images_payload = []
+    for result in top_10_results:
+        image_data = download_gcs_image(result["image_link"])
+        if isinstance(image_data, str):  # Check if an error message was returned
+            return image_data
+        images_payload.append(
+            types.Part(
+                inline_data=types.Blob(
+                    mime_type="image/jpeg",
+                    data=image_data
+                )
             )
         )
-        for result in top_10_results
-    ]
 
     prompt_text = f"""
     You are a highly knowledgeable assistant with expertise in analyzing and synthesizing information.
@@ -278,10 +318,13 @@ def qdrant_search_memory_tool(query: str):
     """
 
     try:
-        client = genai.GenerativeModel("gemini-1.5-flash")  # Updated to use GenerativeModel
+        client = genai.Client(api_key="AIzaSyBfSbHEPbT3JB6WX9DImuKaUyGTmUekakw")
+        storage_client = storage.Client()
+
         print("Sending data to Gemini Vision API...")
-        response = client.generate_content(
-            contents=[{"role": "user", "parts": [{"text": prompt_text}] + images_payload}]
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_text)] + images_payload)]
         )
         return response.text
     except Exception as e:
@@ -293,6 +336,9 @@ async def defined_prompt(state, config):
     thread_id = config['configurable']['thread_id']
     namespace = ("chat", user_id, thread_id)
 
+    # Log the namespace used for memory search
+    rich.print(f"Namespace for memory search in defined_prompt: {namespace}")
+
     # Use asearch for vector similarity search (asynchronous method)
     store = get_store()
     if store is None:
@@ -301,24 +347,28 @@ async def defined_prompt(state, config):
     items = await store.asearch(namespace, query=state["messages"][-1].content)
     memories = "\n\n".join(str(item) for item in items)
 
+    # Log the memories found
+    rich.print(f"Found memories: {memories if memories else 'None'}")
+
     system_msg = f"""
         You are MRIAs, a clinically intelligent assistant designed to support healthcare professionals by retrieving and synthesizing medical information with precision. You operate at the intersection of user memory, vector database knowledge, and clinical expertise.
 
-        Before responding to any query:
-        1. Search the user's memory using the `search_memory_tool` to understand prior interactions, patient history, or context-specific details.
+        **Before responding to any query, you MUST follow these steps:**
+        1. **ALWAYS** use the `search_memory_tool` to search the user's memory for prior interactions, patient history, or context-specific details. This step is mandatory, even if you think you know the answer.
         2. For your context, previous conversations with the user are provided as `memories` below. The user may ask to summarize, reformat, or reference these directly — handle accordingly.
-        3. If memory search yields no useful result, fallback to `qdrant_search_memory_tool` to fetch relevant evidence-based data.
+        3. If the `search_memory_tool` yields no useful result (i.e., returns an empty list or null), **you MUST** use the `qdrant_search_memory_tool` to fetch relevant evidence-based data from the vector database. This step is also mandatory.
         4. Cross-check all responses against clinical best practices and guidelines.
         5. When uncertain, advise consultation with a licensed medical professional.
 
-        When answering:
+        **When answering:**
         - Be concise, clear, and grounded in evidence-based medicine.
-        - Personalize responses using user or patient profiles via the `profileData` tool.
+        - Personalize responses using user or patient profiles via the `profileData` tool if relevant.
         - Maintain a professional tone appropriate for clinical settings.
         - Prioritize safety and accuracy over completeness.
+        - Do not rely solely on your internal knowledge for medical queries. You must use the tools as instructed above.
 
-        After generating your response:
-        1. Use `create_manage_memory_tool` to store both the user query and your reply (especially if informed by `qdrant_search_memory_tool`) for future use.
+        **After generating your response, you MUST follow these steps:**
+        1. **ALWAYS** use `create_manage_memory_tool` to store both the user query and your reply in the database, regardless of whether the response was informed by `qdrant_search_memory_tool` or your internal knowledge. This step is mandatory.
         2. Only relevant and structured information should be stored, not every single message or tool call.
         3. Your goal is to be a smart, safe, clinical bridge — ensuring each answer supports informed decisions aligned with the highest care standards.
 
@@ -334,9 +384,21 @@ config = {
     }
 }
 
-# Define memory tools
+# Explicitly extract user_id and thread_id
+user_id = config["configurable"]["user_id"]
+thread_id = config["configurable"]["thread_id"]
+
+# Ensure config contains resolved values for user_id and thread_id
+config_with_resolved_ids = {
+    "configurable": {
+        "user_id": user_id,
+        "thread_id": thread_id
+    }
+}
+
+# Define memory tools with explicit namespace values
 search_memory_tool = create_search_memory_tool(
-    namespace=("chat", "{user_id}", "{thread_id}"),
+    namespace=("chat", user_id, thread_id),
     instructions=f"""
         Use this tool to search for relevant prior information stored in the user's memory, such as medical history, medications, allergies, prior queries, or clinical context.
         Call this tool:
@@ -346,7 +408,10 @@ search_memory_tool = create_search_memory_tool(
     """
 )
 
-createmanage_memory_tool = create_manage_memory_tool(namespace=('chat', "{user_id}", "{thread_id}"))
+createmanage_memory_tool = create_manage_memory_tool(
+    namespace=("chat", user_id, thread_id)
+)
+
 memory_checkpointer = MemorySaver()
 
 # Initialize embeddings
@@ -356,7 +421,12 @@ embedder = init_embeddings("openai:text-embedding-3-small")
 async def run_query():
     async with AsyncPostgresStore.from_conn_string(conn_string) as store:
         # Set up the store with the embeddings index
-        await store.setup()
+        try:
+            await store.setup()
+            rich.print("Successfully set up AsyncPostgresStore.")
+        except Exception as e:
+            rich.print(f"[Postgres Error] Failed to set up AsyncPostgresStore: {str(e)}")
+            raise
 
         # Create agent with memory tools
         main_agent = create_react_agent(
@@ -372,18 +442,37 @@ async def run_query():
             store=store
         )
 
-        # Update config to include the store
+        # Update config to include the store and ensure resolved IDs
         config_with_store = {
-            **config,
+            **config_with_resolved_ids,
             "store": store
         }
 
-        # Run the query
+        # Define the user query
+        user_query = "NORMAL VALUES FOR HEMODYNAMIC MEASUREMENTS, (Resistances [dyn-s]/cm5)"
+        user_message = HumanMessage(content=user_query)
+
+        # Embed the user query (for potential future use, but not storing directly)
+        user_embedding = embedder.embed_documents([user_query])[0]
+        namespace = ("chat", user_id, thread_id)
+        rich.print(f"Namespace for storage: {namespace}")
+
+        # Run the agent, which will handle storing the conversation via create_manage_memory_tool
         response = await main_agent.ainvoke(
-            {"messages": [HumanMessage(content="Give me the subheadings of the INDICATIONS FOR CARDIAC CATHETERIZATION AND CORONARY ANGIOGRAPHY")]},
+            {"messages": [user_message]},
             config=config_with_store
         )
         rich.print(response)
+
+        # Verify stored data by searching
+        try:
+            stored_items = await store.asearch(namespace, query=user_query)
+            rich.print("Stored items in database after query:")
+            for item in stored_items:
+                rich.print(f"Item: {item.value}, Score: {item.score}")
+        except Exception as e:
+            rich.print(f"[Postgres Error] Failed to search database after query: {str(e)}")
+            raise
 
 # Run the async function
 if __name__ == "__main__":
