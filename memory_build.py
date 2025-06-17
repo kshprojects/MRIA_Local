@@ -28,6 +28,7 @@ import PIL.Image
 from langchain_core.messages import SystemMessage
 
 
+print("set env variable OPENAI_API_KEY without fail")
 
 qdrantclient = QdrantClient(
     url="https://1afa2602-77bb-44f6-95cb-9d5c3b930184.ap-south-1-0.aws.cloud.qdrant.io",

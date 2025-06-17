@@ -33,6 +33,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langgraph.config import get_store
 import rich
+from langsmith import traceable
+
 
 # Initialize dotenv to load environment variables
 load_dotenv()
@@ -49,6 +51,7 @@ rich = Console()
 conn_string = "postgresql://neondb_owner:npg_sOwWAdz0XMv5@ep-floral-bird-a1rrkx6w-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
 
 print("set env variable OPENAI_API_KEY without fail")
+
 
 qdrantclient = QdrantClient(
     url="https://1afa2602-77bb-44f6-95cb-9d5c3b930184.ap-south-1-0.aws.cloud.qdrant.io",
@@ -86,6 +89,7 @@ print("At Profile")
 """User profile specifically designed for medical professionals"""
 
 @tool
+@traceable(run_type="tool", metadata={"tool_name": "profileData", "purpose": "User profile extraction"})
 def profileData(query: str, config):
     """
     Extracts and manages detailed user profile information from natural language input,
@@ -170,6 +174,7 @@ def profileData(query: str, config):
     )
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=30))
+@traceable(run_type="retriever", metadata={"tool_name": "qdrant_search_memory_tool", "purpose": "Vector database search"})
 def qdrant_search_memory_tool(query: str):
     """
     Processes a user query to retrieve relevant documents from a vector database
@@ -324,16 +329,18 @@ def qdrant_search_memory_tool(query: str):
     """
 
     try:
-        # Configure the Gemini API with the provided API key
-        genai.configure(api_key="AIzaSyBfSbHEPbT3JB6WX9DImuKaUyGTmUekakw")
-        client = genai.GenerativeModel("gemini-1.5-flash")
+        client = genai.Client(api_key="AIzaSyBfSbHEPbT3JB6WX9DImuKaUyGTmUekakw")
+        storage_client = storage.Client()
+
         print("Sending data to Gemini Vision API...")
-        response = client.generate_content(
-            contents=[{"role": "user", "parts": [{"text": prompt_text}] + images_payload}]
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_text)] + images_payload)]
         )
         return response.text
     except Exception as e:
-        return f"GEMINI Error: {str(e)}"
+        print(f"GEMINI Error: {e}")
+        return None
 
 async def defined_prompt(state, config):
     user_id = config['configurable']['user_id']
@@ -422,6 +429,7 @@ memory_checkpointer = MemorySaver()
 embedder = init_embeddings("openai:text-embedding-3-small")
 
 # Wrap invocation in an async main function
+@traceable(run_type="llm", metadata={"component": "main_query_loop", "user_id": "dynamic"})
 async def run_query():
     async with AsyncPostgresStore.from_conn_string(conn_string) as store:
         # Set up the store with the embeddings index
@@ -458,7 +466,7 @@ async def run_query():
         # Interactive loop to prompt the user for queries
         while True:
             # Prompt the user for a query
-            user_query = input("Please enter your query (or type 'quit' to exit): ").strip()
+            user_query = input("Please enter your query (or type 'quit' to quit): ").strip()
 
             # Check if the user wants to quit
             if user_query.lower() == "quit":
