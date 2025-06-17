@@ -348,7 +348,7 @@ async def defined_prompt(state, config):
     namespace = ("chat", user_id, thread_id)
 
     # Log the namespace used for memory search
-    rich.print(f"Namespace for memory search in defined_prompt: {namespace}")
+    rich.print(f"Namespace for memory search in define d_prompt: {namespace}")
 
     # Use asearch for vector similarity search (asynchronous method)
     store = get_store()
