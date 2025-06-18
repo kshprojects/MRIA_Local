@@ -35,13 +35,24 @@ from langgraph.config import get_store
 import rich
 from langsmith import traceable
 
-
-# Initialize dotenv to load environment variables
+# Load environment variables
 load_dotenv()
+
+# Verify LangSmith environment variables
+if not os.getenv("LANGCHAIN_API_KEY"):
+    rich.print("[LangSmith Error] LANGCHAIN_API_KEY environment variable not set. Please set it in your .env file.")
+    exit(1)
+if not os.getenv("LANGCHAIN_PROJECT"):
+    rich.print("[LangSmith Warning] LANGCHAIN_PROJECT not set. Default project will be used.")
 
 # Validate GOOGLE_APPLICATION_CREDENTIALS
 if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     rich.print("[GCS Error] GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Please set it to the path of your Google Cloud service account key JSON file.")
+    exit(1)
+
+# Validate GOOGLE_APPLICATION_CREDENTIALS
+if not os.getenv("OPEN_API_KEY"):
+    rich.print("[OPEN_API_KEY] environment variable not set. Please set it to the path")
     exit(1)
 
 # Initialize Rich for better output formatting and visualization
