@@ -19,10 +19,11 @@ from langchain.embeddings import init_embeddings
 from tenacity import retry, stop_after_attempt, wait_exponential
 from rich.console import Console
 
+
 from .config import (
     QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION_NAME, QDRANT_TIMEOUT,
     MODEL_NAME, GEMINI_API_KEY, POSTGRES_CONNECTION_STRING,
-    SEARCH_LIMIT, PREFETCH_LIMIT, LLM_CATEGORY
+    SEARCH_LIMIT, PREFETCH_LIMIT
 )
 
 console = Console()
@@ -50,7 +51,7 @@ class QdrantService:
             else:
                 console.print(f"Error accessing Qdrant collection: {e}")
     
-    def reranking_search_batch(self, query_batch, search_limit=SEARCH_LIMIT, prefetch_limit=PREFETCH_LIMIT, filter_list=LLM_CATEGORY):
+    def reranking_search_batch(self, query_batch,filter_list, search_limit=SEARCH_LIMIT, prefetch_limit=PREFETCH_LIMIT):
         """Perform reranking search with batch queries"""
         filter_ = None
         if filter_list:
@@ -147,7 +148,13 @@ class ModelService:
         with torch.no_grad():
             processed_queries = self.processor.process_queries(query_batch).to(self.model.device)
             query_embeddings_batch = self.model(**processed_queries)
-        return query_embeddings_batch.cpu().float().numpy()
+            embeddings = query_embeddings_batch.cpu().float().numpy()
+        
+            # # Check if vectors are normalized
+            # norms = np.linalg.norm(embeddings, axis=1)
+            # console.print(f"[Debug] Vector norms: {norms}")
+            # console.print(f"[Debug] Are vectors normalized? {np.allclose(norms, 1.0, atol=1e-3)}")
+        return embeddings
 
 class GCSService:
     """Service for Google Cloud Storage operations"""

@@ -28,7 +28,7 @@ def validate_environment():
         exit(1)
 
     # Validate OPENAI_API_KEY
-    if not os.getenv("OPEN_API_KEY"):
+    if not os.getenv("OPENAI_API_KEY"):
         console.print("[OPEN_API_KEY] environment variable not set. Please set it to the path")
         exit(1)
 
@@ -59,9 +59,17 @@ DEFAULT_CONFIG = {
 }
 
 # Search configurations
-SEARCH_LIMIT = 20
+SEARCH_LIMIT = 15
 PREFETCH_LIMIT = 200
-LLM_CATEGORY = ['Internal Medicine']
+SCORE_THRESHOLD = 12
+
+#gap threshold
+GAP_THRESHOLD = 3.0
+MIN_RESULTS = 2
+MAX_RESULTS = SEARCH_LIMIT
+
+ENABLE_BACKGROUND_STORAGE = True  
+DEBUG_STORAGE = True  
 
 # Set Google Cloud credentials environment variable
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCP_CREDENTIALS_PATH
