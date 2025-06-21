@@ -124,4 +124,4 @@ def print_startup_banner():
 
 def print_shutdown_message():
     """Print shutdown message"""
-    console.print("\n[blue]👋 Thank you for using MRIA! Stay safe and keep healing! 🏥[/blue]")
+    console.print("\n[blue]👋 Thank you for using MRIA! We will revolutionize the healthcare with AI! 🏥[/blue]")
