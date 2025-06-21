@@ -23,7 +23,7 @@ from rich.console import Console
 from .config import (
     QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION_NAME, QDRANT_TIMEOUT,
     MODEL_NAME, GEMINI_API_KEY, POSTGRES_CONNECTION_STRING,
-    SEARCH_LIMIT, PREFETCH_LIMIT,SCORE_THRESHOLD
+    SEARCH_LIMIT, PREFETCH_LIMIT
 )
 
 console = Console()
@@ -51,7 +51,7 @@ class QdrantService:
             else:
                 console.print(f"Error accessing Qdrant collection: {e}")
     
-    def reranking_search_batch(self, query_batch,filter_list, search_limit=SEARCH_LIMIT, prefetch_limit=PREFETCH_LIMIT,score_threshold=SCORE_THRESHOLD):
+    def reranking_search_batch(self, query_batch,filter_list, search_limit=SEARCH_LIMIT, prefetch_limit=PREFETCH_LIMIT):
         """Perform reranking search with batch queries"""
         filter_ = None
         if filter_list:
@@ -81,7 +81,6 @@ class QdrantService:
                 ],
                 filter=filter_,
                 limit=search_limit,
-                score_threshold=SCORE_THRESHOLD,
                 with_payload=True,
                 with_vector=False,
                 using="original"
@@ -116,7 +115,6 @@ class QdrantService:
                     ],
                     filter=None,
                     limit=search_limit,
-                    score_threshold=score_threshold,
                     with_payload=True,
                     with_vector=False,
                     using="original"

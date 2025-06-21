@@ -17,9 +17,6 @@ from rich.console import Console
 from .models import UserProfile
 from .services import qdrant_service, model_service, gcs_service, gemini_service
 from .storage_utils import quick_background_save, create_timestamped_folder, start_background_image_storage, prepare_images_for_background_storage
-from .config import (
-    GAP_THRESHOLD,MIN_RESULTS,MAX_RESULTS
-)
 
 console = Console()
 
@@ -160,92 +157,20 @@ def qdrant_search_memory_tool(query: str):
         return f"Error embedding query: {str(e)}"
 
     # Search Qdrant
-    answer_colqwen = qdrant_service.reranking_search_batch(colqwen_query, filter_list=category_list)
+    answer_colqwen = qdrant_service.reranking_search_batch(colqwen_query,filter_list=category_list)
     if isinstance(answer_colqwen, str):  # Check if an error message was returned
         return answer_colqwen
 
-    #Apply gap filtering to pre-filtered results
+    # Extract top 10 results
+    top_results = []
     try:
-        initial_points = answer_colqwen[0].points
-        console.print(f"[Initial Results] Found {len(initial_points)} results above basic threshold")
-        
-        if not initial_points:
-            return "No documents found above the score threshold."
-    
-        # Display all scores for analysis
-        all_scores = [point.score for point in initial_points]
-        console.print(f"[Score Distribution] {[round(score, 2) for score in all_scores[:10]]}")
-        
-        # Sort points by score (highest first) - should already be sorted but ensure it
-        sorted_points = sorted(initial_points, key=lambda p: p.score, reverse=True)
-        
-        # Always keep the top result
-        filtered_points = [sorted_points[0]]
-        console.print(f"[Gap Filter] Rank 1: {sorted_points[0].score:.2f} (top result - always keep)")
-        
-        # Apply gap analysis starting from rank 2
-        for i in range(1, len(sorted_points)):
-            current_score = sorted_points[i].score
-            previous_score = sorted_points[i-1].score
-            gap = previous_score - current_score
-            
-            console.print(f"[Gap Filter] Rank {i+1}: {current_score:.2f} (gap: {gap:.2f})")
-            
-            # Check for significant gap
-            if gap >= GAP_THRESHOLD:
-                console.print(f"[Gap Filter] 🛑 SIGNIFICANT GAP: {gap:.2f} ≥ {GAP_THRESHOLD} - stopping here")
-                console.print(f"[Gap Filter] Quality cluster contains ranks 1-{i} ({len(filtered_points)} results)")
-                break
-            
-            # Small gap - add to same quality cluster
-            filtered_points.append(sorted_points[i])
-            console.print(f"[Gap Filter] ✅ Small gap ({gap:.2f}) - adding to quality cluster")
-            
-            # Respect max results limit
-            if len(filtered_points) >= MAX_RESULTS:
-                console.print(f"[Gap Filter] 📊 Reached max results limit: {MAX_RESULTS}")
-                break
-        
-        # Ensure minimum results (fallback safety)
-        if len(filtered_points) < MIN_RESULTS and len(sorted_points) >= MIN_RESULTS:
-            console.print(f"[Gap Filter] 📋 Ensuring minimum {MIN_RESULTS} results")
-            filtered_points = sorted_points[:MIN_RESULTS]
-        
-        # Log final selection
-        final_scores = [round(p.score, 2) for p in filtered_points]
-        console.print(f"[Gap Filter] 🎯 Final selection: {len(filtered_points)} results")
-        console.print(f"[Gap Filter] Selected scores: {final_scores}")
-        
-        # Quality analysis
-        if len(filtered_points) > 1:
-            score_range = filtered_points[0].score - filtered_points[-1].score
-            avg_score = sum(p.score for p in filtered_points) / len(filtered_points)
-            console.print(f"[Quality Analysis] Score range: {score_range:.2f}, Average: {avg_score:.2f}")
-        
-        # Convert to final result format with scores included
-        top_results = []
-        for point in filtered_points:
-            top_results.append({
-                "image_link": point.payload['image_link'],
-                "score": point.score  # Include score for logging/debugging
-            })
-        
-        console.print(f"[Final Results] Processing {len(top_results)} gap-filtered results")
-        
-        # Optional: Show what was filtered out
-        if len(initial_points) > len(filtered_points):
-            filtered_out = len(initial_points) - len(filtered_points)
-            lowest_kept = filtered_points[-1].score if filtered_points else 0
-            console.print(f"[Gap Filter Impact] Filtered out {filtered_out} results below score {lowest_kept:.2f}")
-
+        for point in answer_colqwen[0].points[:5]:
+            top_results.append({"image_link": point.payload['image_link']})
     except Exception as e:
         return f"Error processing Qdrant results: {str(e)}"
 
     if not top_results:
         return "No documents found after gap filtering."
-
-    # Continue with rest of processing (image download, etc.)
-    console.print(f"[Processing] Continuing with {len(top_results)} high-confidence results...")
 
 
     # 1. Download images for API (synchronous - required for Gemini)
