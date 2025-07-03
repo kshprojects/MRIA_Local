@@ -93,7 +93,9 @@ def profileData(query: str, config):
 def LLM_filter(query:str):
     """Categorizes the user query into any of the predefined Book_Categories, it can also be list of categories"""
 
-    Book_Categories = ["Anesthesia", "Pain_Management", "Critical_Care", "Internal_Medicine","Dosing"]
+    Book_Categories = ["Anesthesia","Pain_Management","Critical_Care","Internal_Medicine","Dosing","Anatomy","Behavioral_Sciences","Psychiatry","Biochemistry","Microbiology",
+    "Immunology","Pathology","Pharmacology","Physiology","Basic Pharmacology","Biostatistics","Epidemiology","Cardiology","Cell_Biology","Dermatology",
+    "Endocrinology","Gastroenterology","Genetics","Hematology","Infectious Disease","Musculoskeletal","Neurology","Pulmonology","Renal","Reproductive"]
 
     # Construct the prompt for categorization
     prompt_text = f"""
@@ -246,6 +248,7 @@ def qdrant_search_memory_tool(query: str):
 
     # Generate response using Gemini
     gemini_response = gemini_service.generate_content(prompt_text, images_payload)
+    print("GeminiLLMResponse:",gemini_response)
     return gemini_response
 
 def create_memory_tools(user_id: str, thread_id: str):
