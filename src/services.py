@@ -142,6 +142,8 @@ class ModelService:
             device_map="cpu",
         ).eval()
         self.processor = ColQwen2Processor.from_pretrained(MODEL_NAME, use_fast=True)
+        # Save the processor locally for patching
+        self.processor.save_pretrained("patched_processor")
     
     def batch_embed_query(self, query_batch):
         """Batch embed queries using the model"""

@@ -1,4 +1,4 @@
-    # Simple interface to run the system
+# Simple interface to run the system
 # Just imports and calls agent.run_query()
 
 #!/usr/bin/env python3

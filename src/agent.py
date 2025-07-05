@@ -62,6 +62,107 @@ async def defined_prompt(state, config):
     """
     return [SystemMessage(content=system_msg)] + state["messages"]
 
+#for fastapi query endpoint
+@traceable(run_type="llm", metadata={"component": "single_query", "user_id": "dynamic"})
+async def process_single_query(query: str, conversation_id: str, user_id: str) -> str:
+    """
+    Process a single query and return the result
+    
+    Args:
+        query: The research query to process
+        conversation_id: Unique identifier for the conversation session
+        
+    Returns:
+        str: The processed result
+        
+    Raises:
+        Exception: If processing fails
+    """
+    try:
+        # Validate environment
+        validate_environment()
+        
+        # Use the provided user_id and conversation_id (thread_id)
+        thread_id = conversation_id
+        
+        # Create config with conversation-specific IDs
+        config_with_resolved_ids = {
+            "configurable": {
+                "user_id": user_id,
+                "thread_id": thread_id
+            }
+        }
+
+        # Create memory tools
+        search_memory_tool, manage_memory_tool = create_memory_tools(user_id, thread_id)
+        
+        # Get checkpointer and embedder
+        memory_checkpointer = database_service.get_memory_checkpointer()
+        embedder = database_service.get_embedder()
+
+        # Setup async store
+        async with await database_service.get_async_postgres_store() as store:
+            # Set up the store with the embeddings index
+            try:
+                await store.setup()
+                console.print(f"Successfully set up AsyncPostgresStore for conversation: {conversation_id}")
+            except Exception as e:
+                console.print(f"[Postgres Error] Failed to set up AsyncPostgresStore: {str(e)}")
+                raise
+
+            # Create agent with memory tools
+            main_agent = create_react_agent(
+                tools=[
+                    profileData,
+                    search_memory_tool,
+                    qdrant_search_memory_tool,
+                    manage_memory_tool,
+                ],
+                prompt=defined_prompt,
+                model="openai:gpt-4o",
+                checkpointer=memory_checkpointer,
+                store=store
+            )
+
+            # Update config to include the store
+            config_with_store = {
+                **config_with_resolved_ids,
+                "store": store
+            }
+
+            namespace = ("chat", user_id, thread_id)
+            console.print(f"Processing query for namespace: {namespace}")
+
+            # Create a HumanMessage with the user's query
+            user_message = HumanMessage(content=query)
+
+            # Embed the user query (for potential future use)
+            user_embedding = embedder.embed_documents([query])[0]
+
+            # Run the agent to process the query
+            try:
+                response = await main_agent.ainvoke(
+                    {"messages": [user_message]},
+                    config=config_with_store
+                )
+                
+                # Extract the agent's response
+                agent_response = response["messages"][-1].content
+                console.print(f"Agent response for conversation {conversation_id}: {agent_response[:100]}...")
+
+                return agent_response
+
+            except Exception as e:
+                console.print(f"[Agent Error] Failed to process query: {str(e)}")
+                raise Exception(f"Agent processing failed: {str(e)}")
+
+    except Exception as e:
+        # Log the error and re-raise with more context
+        error_msg = f"Failed to process query '{query[:50]}...' for conversation {conversation_id}: {str(e)}"
+        console.print(f"[Error] {error_msg}")
+        raise Exception(error_msg) from e
+
+
 @traceable(run_type="llm", metadata={"component": "main_query_loop", "user_id": "dynamic"})
 async def run_query():
     """Main function to run the query loop"""

@@ -7,7 +7,7 @@ langchain-google-genai
 pillow
 colpali_engine
 huggingface_hub[hf_transfer]
-transformers
+transformers==4.53.0
 qdrant-client
 fsspec
 protobuf
@@ -18,3 +18,7 @@ asyncio
 langgraph-checkpoint-postgres
 google-genai
 google-cloud-storage
+fastapi[standard]
+uvicorn
+pydantic
+rich

@@ -166,7 +166,7 @@ def qdrant_search_memory_tool(query: str):
     # Extract top 10 results
     top_results = []
     try:
-        for point in answer_colqwen[0].points[:5]:
+        for point in answer_colqwen[0].points[:10]:
             top_results.append({"image_link": point.payload['image_link']})
     except Exception as e:
         return f"Error processing Qdrant results: {str(e)}"
